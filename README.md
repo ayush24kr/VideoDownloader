@@ -31,7 +31,7 @@ A powerful Telegram bot for downloading and uploading videos, PDFs, and other me
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/creator-boy/PyroNoobCodeX.git
+   git clone https://github.com/ayush24kr/VideoDownloader.git
    cd PyroNoobCodeX
    ```
 
