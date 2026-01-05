@@ -2,124 +2,92 @@ import subprocess
 import datetime
 import asyncio
 import os
-import requests
 import time
-from p_bar import progress_bar
 import aiohttp
-import tgcrypto
 import aiofiles
-from pyrogram.types import Message
-from pyrogram import Client, filters
+import logging
+from p_bar import progress_bar
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def duration(filename):
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
-                             "format=duration", "-of",
-                             "default=noprint_wrappers=1:nokey=1", filename],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
-    return float(result.stdout)
+    try:
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                                 "format=duration", "-of",
+                                 "default=noprint_wrappers=1:nokey=1", filename],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT)
+        return float(result.stdout)
+    except Exception as e:
+        logger.error(f"Error getting duration: {e}")
+        return 0.0
 
-async def aio(url,name):
+async def aio(url, name):
     k = f'{name}.pdf'
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             if resp.status == 200:
-                f = await aiofiles.open(k, mode='wb')
-                await f.write(await resp.read())
-                await f.close()
+                async with aiofiles.open(k, mode='wb') as f:
+                    await f.write(await resp.read())
     return k
 
-
-async def download(url,name):
+async def download(url, name):
     ka = f'{name}.pdf'
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             if resp.status == 200:
-                f = await aiofiles.open(ka, mode='wb')
-                await f.write(await resp.read())
-                await f.close()
+                async with aiofiles.open(ka, mode='wb') as f:
+                    await f.write(await resp.read())
     return ka
-
-
-
-def parse_vid_info(info):
-    info = info.strip()
-    info = info.split("\n")
-    new_info = []
-    temp = []
-    for i in info:
-        i = str(i)
-        if "[" not in i and '---' not in i:
-            while "  " in i:
-                i = i.replace("  ", " ")
-            i.strip()
-            i = i.split("|")[0].split(" ",2)
-            try:
-                if "RESOLUTION" not in i[2] and i[2] not in temp and "audio" not in i[2]:
-                    temp.append(i[2])
-                    new_info.append((i[0], i[2]))
-            except:
-                pass
-    return new_info
-
 
 def vid_info(info):
     info = info.strip()
     info = info.split("\n")
     new_info = dict()
     temp = []
+    
     for i in info:
         i = str(i)
         if "[" not in i and '---' not in i:
             while "  " in i:
                 i = i.replace("  ", " ")
-            i.strip()
-            i = i.split("|")[0].split(" ",3)
+            i = i.strip()
+            parts = i.split("|")[0].split(" ", 3)
+            
             try:
-                if "RESOLUTION" not in i[2] and i[2] not in temp and "audio" not in i[2]:
-                    temp.append(i[2])
+                # parts[0] is usually ID/format code, parts[2] is resolution
+                if len(parts) > 2:
+                    res = parts[2]
+                    fmt_code = parts[0]
                     
-                    # temp.update(f'{i[2]}')
-                    # new_info.append((i[2], i[0]))
-                    #  mp4,mkv etc ==== f"({i[1]})" 
-                    
-                    new_info.update({f'{i[2]}':f'{i[0]}'})
-
-            except:
+                    if "RESOLUTION" not in res and res not in temp and "audio" not in res:
+                        temp.append(res)
+                        new_info[res] = fmt_code
+            except Exception as e:
+                logger.error(f"Error parsing video info line: {i} - {e}")
                 pass
+                
     return new_info
 
-
-
 async def run(cmd):
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE)
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE)
 
-    stdout, stderr = await proc.communicate()
-
-    print(f'[{cmd!r} exited with {proc.returncode}]')
-    if proc.returncode == 1:
+        stdout, stderr = await proc.communicate()
+        
+        if proc.returncode == 0:
+            return stdout.decode() if stdout else ""
+        else:
+            logger.error(f"Command '{cmd}' failed with return code {proc.returncode}")
+            return False
+    except Exception as e:
+        logger.error(f"Error running command '{cmd}': {e}")
         return False
-    if stdout:
-        return f'[stdout]\n{stdout.decode()}'
-    if stderr:
-        return f'[stderr]\n{stderr.decode()}'
-
-    
-    
-    
-def old_download(url, file_name, chunk_size = 1024 * 10):
-    if os.path.exists(file_name):
-        os.remove(file_name)
-    r = requests.get(url, allow_redirects=True, stream=True)
-    with open(file_name, 'wb') as fd:
-        for chunk in r.iter_content(chunk_size=chunk_size):
-            if chunk:
-                fd.write(chunk)
-    return file_name
-
 
 def human_readable_size(size, decimal_places=2):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
@@ -128,69 +96,130 @@ def human_readable_size(size, decimal_places=2):
         size /= 1024.0
     return f"{size:.{decimal_places}f} {unit}"
 
-
 def time_name():
     date = datetime.date.today()
     now = datetime.datetime.now()
     current_time = now.strftime("%H%M%S")
     return f"{date} {current_time}.mp4"
 
-async def download_video(url,cmd, name):
-    download_cmd = f"{cmd} -R 25 --fragment-retries 25 --external-downloader aria2c --downloader-args 'aria2c: -x 16 -j 32'"
-    k = os.system(download_cmd)
+async def download_video(url, cmd, name):
+    # Remove aria2c to prevent file locking issues on Windows
+    download_cmd = f"{cmd} -R 25 --fragment-retries 25"
+    logger.info(f"Downloading: {download_cmd}")
+    
+    # Run the download command
+    # Using run() wrapper or direct subprocess based on preference, but here we use os.system in original
+    # Switching to asyncio.subprocess for non-blocking behavior would be better, but sticking to logic structure for now
+    # However, one major fix: os.system waits. We should use await run(download_cmd) if possible, 
+    # but run() captures output. Let's use create_subprocess_shell for void execution.
+    
+    process = await asyncio.create_subprocess_shell(download_cmd)
+    await process.wait()
+
     try:
         if os.path.isfile(name):
             return name
         elif os.path.isfile(f"{name}.webm"):
             return f"{name}.webm"
-        name = name.split(".")[0]
-        if os.path.isfile(f"{name}.mkv"):
-            return f"{name}.mkv"
-        elif os.path.isfile(f"{name}.mp4"):
-            return f"{name}.mp4"
-        elif os.path.isfile(f"{name}.mp4.webm"):
-            return f"{name}.mp4.webm"
+        
+        # Check for other extensions
+        base_name = name.split(".")[0] if "." in name else name
+        extensions = [".mkv", ".mp4", ".mp4.webm"]
+        
+        for ext in extensions:
+            if os.path.isfile(f"{base_name}{ext}"):
+                return f"{base_name}{ext}"
 
         return name
-    except FileNotFoundError as exc:
-        return os.path.isfile.splitext[0] + "." + "mp4"
-
-async def send_doc(bot: Client, m: Message,cc,ka,cc1,prog,count,name):
-    reply = await m.reply_text(f"Uploading - `{name}`")
-    time.sleep(1)
-    start_time = time.time()
-    await m.reply_document(ka,caption=cc1)
-    count+=1
-    await reply.delete (True)
-    time.sleep(1)
-    os.remove(ka)
-    time.sleep(3) 
-
-async def send_vid(bot: Client, m: Message,cc,filename,thumb,name,prog):
-    
-    subprocess.run(f'ffmpeg -i "{filename}" -ss 00:01:00 -vframes 1 "{filename}.jpg"', shell=True)
-    await prog.delete (True)
-    reply = await m.reply_text(f"**Uploading ...** - `{name}`")
-    try:
-        if thumb == "no":
-            thumbnail = f"{filename}.jpg"
-        else:
-            thumbnail = thumb
     except Exception as e:
-        await m.reply_text(str(e))
+        logger.error(f"Error finding downloaded file: {e}")
+        return name + ".mp4"
+
+async def send_vid(bot, m, cc, filename, thumb, name, prog):
+    
+    # Generate thumbnail if needed
+    if not os.path.isfile(f"{filename}.jpg"):
+        cmd = f'ffmpeg -i "{filename}" -ss 00:01:00 -vframes 1 "{filename}.jpg"'
+        await run(cmd)
+    
+    await prog.delete(revoke=True)
+    reply = await m.reply_text(f"**Uploading ...** - `{name}`")
+    
+    try:
+        thumbnail = thumb if thumb != "no" else f"{filename}.jpg"
+        if not os.path.isfile(thumbnail):
+             thumbnail = None
+    except Exception:
+        thumbnail = None
 
     dur = int(duration(filename))
+    start_time = time.time()
+
+    try:
+        await m.reply_video(
+            filename,
+            caption=cc,
+            supports_streaming=True,
+            height=720,
+            width=1280,
+            thumb=thumbnail,
+            duration=dur,
+            progress=progress_bar,
+            progress_args=(reply, start_time)
+        )
+    except Exception as e:
+        logger.warning(f"Video upload failed, trying as document: {e}")
+        await m.reply_document(
+            filename,
+            caption=cc,
+            progress=progress_bar,
+            progress_args=(reply, start_time)
+        )
+
+    # Cleanup
+    if os.path.exists(filename):
+        os.remove(filename)
+    
+    if os.path.exists(f"{filename}.jpg"):
+        os.remove(f"{filename}.jpg")
+        
+    await reply.delete(revoke=True)
+
+async def send_doc(bot, m, cc, filename, thumb, name, prog):
+    # Generate thumbnail if needed (for document thumb)
+    if not os.path.isfile(f"{filename}.jpg"):
+        cmd = f'ffmpeg -i "{filename}" -ss 00:01:00 -vframes 1 "{filename}.jpg"'
+        await run(cmd)
+    
+    await prog.delete(revoke=True)
+    reply = await m.reply_text(f"**Uploading as Doc ...** - `{name}`")
+    
+    try:
+        thumbnail = thumb if thumb != "no" else f"{filename}.jpg"
+        if not os.path.isfile(thumbnail):
+             thumbnail = None
+    except Exception:
+        thumbnail = None
 
     start_time = time.time()
 
     try:
-        await m.reply_video(filename,caption=cc, supports_streaming=True,height=720,width=1280,thumb=thumbnail,duration=dur, progress=progress_bar,progress_args=(reply,start_time))
-    except Exception:
-        await m.reply_document(filename,caption=cc, progress=progress_bar,progress_args=(reply,start_time))
+        await m.reply_document(
+            filename,
+            caption=cc,
+            thumb=thumbnail,
+            progress=progress_bar,
+            progress_args=(reply, start_time)
+        )
+    except Exception as e:
+        logger.error(f"Deep document upload failed: {e}")
+        await m.reply_text(f"Upload failed: {e}")
 
+    # Cleanup
+    if os.path.exists(filename):
+        os.remove(filename)
     
-    os.remove(filename)
-
-    os.remove(f"{filename}.jpg")
-    await reply.delete (True)
-    
+    if os.path.exists(f"{filename}.jpg"):
+        os.remove(f"{filename}.jpg")
+        
+    await reply.delete(revoke=True)
