@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 # Initialize Bot
 bot = Client(
     "bot",
-    api_id=,
-    api_hash="",
-    bot_token=""
+    api_id=23285995,
+    api_hash="e361383a58365bf08ef61587dae02dca",
+    bot_token="8476031679:AAEBvxwmYLxgGxD30ODv0AVDFUCvOnlsSjw"
 )
 
 cancel_process = False
@@ -53,32 +53,43 @@ async def batch_download_handler(bot: Client, m: Message):
     
     is_jw = m.command[0] == "jw"
     
-    # 1. Get the TXT file
-    editable = await m.reply_text("Please send the **txt file** containing Name:Link pairs.")
+    # 1. Get the TXT file or Link
+    editable = await m.reply_text("Please send the **txt file** (Name:Link) OR a **direct link**.")
     input_msg: Message = await bot.listen(editable.chat.id)
     
-    if not input_msg.document or not input_msg.document.file_name.endswith(".txt"):
-         await m.reply_text("Invalid file. Please send a .txt file.")
-         return
-
-    file_path = await input_msg.download()
-    await input_msg.delete(True)
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read().splitlines()
-        os.remove(file_path)
-    except Exception as e:
-        await m.reply_text(f"Error reading file: {e}")
+    links = []
+    
+    if input_msg.document and input_msg.document.file_name.endswith(".txt"):
+         # Process TXT file
+         file_path = await input_msg.download()
+         await input_msg.delete(True)
+         
+         try:
+             with open(file_path, "r", encoding="utf-8") as f:
+                 content = f.read().splitlines()
+             os.remove(file_path)
+             
+             for line in content:
+                 if ":" in line:
+                     links.append(line.split(":", 1))
+         except Exception as e:
+             await m.reply_text(f"Error reading file: {e}")
+             return
+    
+    elif input_msg.text and input_msg.text.startswith(("http://", "https://")):
+         # Process Single Link
+         url = input_msg.text.strip()
+         await m.reply_text("**Enter Name for this video:**")
+         name_input: Message = await bot.listen(editable.chat.id)
+         name = name_input.text.strip()
+         links.append((name, url))
+         
+    else:
+        await m.reply_text("Invalid input. Please send a .txt file or a valid link.")
         return
 
-    links = []
-    for line in content:
-        if ":" in line:
-            links.append(line.split(":", 1))
-    
     if not links:
-        await m.reply_text("No valid links found in the file.")
+        await m.reply_text("No valid links found.")
         return
 
     # 2. Get User Inputs
@@ -160,7 +171,7 @@ async def batch_download_handler(bot: Client, m: Message):
                  if os.path.isfile("cookies.txt"):
                      cookies_arg = "--cookies cookies.txt"
                      
-                 cmd = f'yt-dlp {cookies_arg} --ffmpeg-location /usr/bin/ffmpeg -o "{name_clean}.mp4" --no-keep-video --remux-video mkv "{url}"'
+                 cmd = f'yt-dlp {cookies_arg} -o "{name_clean}.mp4" --no-keep-video --remux-video mkv -N 16 "{url}"'
             
             # Display Progress
             msg_text = (
@@ -254,8 +265,7 @@ async def get_ytdlp_command(url, name, resolution, index):
     if os.path.isfile("cookies.txt"):
         cookies_arg = "--cookies cookies.txt"
 
-    return f'yt-dlp {cookies_arg} --js-runtimes node --ffmpeg-location /usr/bin/ffmpeg -f "{f_str}" --merge-output-format mkv --no-keep-video --remux-video mkv "{url}" -o "{name}.%(ext)s" -R 25 --fragment-retries 25'
+    return f'yt-dlp {cookies_arg} -f "{f_str}" --merge-output-format mkv --no-keep-video --remux-video mkv "{url}" -o "{name}.%(ext)s" -N 16 --fragment-retries 25'
 
 if __name__ == "__main__":
     bot.run()
-
