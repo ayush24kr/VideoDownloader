@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 # Initialize Bot
 bot = Client(
     "bot",
-    api_id=23285995,
-    api_hash="e361383a58365bf08ef61587dae02dca",
-    bot_token="8476031679:AAEBvxwmYLxgGxD30ODv0AVDFUCvOnlsSjw"
+
 )
 
 cancel_process = False
@@ -269,3 +267,4 @@ async def get_ytdlp_command(url, name, resolution, index):
 
 if __name__ == "__main__":
     bot.run()
+
